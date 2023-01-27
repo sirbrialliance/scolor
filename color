@@ -1,0 +1,697 @@
+#!/usr/local/bin/python2
+# -*- coding: utf-8 -*-
+
+# Color output script
+#
+# Copyright (c) 2013, Qualtrics
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
+# following conditions are met:
+#
+# Redistributions of source code must retain the above copyright notice, this list of conditions and the following
+# disclaimer.
+# Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following
+# disclaimer in the documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+# INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+import sys
+import optparse
+import locale
+import re
+
+class TextStyle:
+	colorReset = "\033[0m"
+
+	attributeTypes = {
+		'bold': 1,
+		#'weak': 2,
+		'italic': 3,
+		'underline': 4,
+		'inverse': 7,
+		'invisible': 8,
+		'strike': 9,
+	}
+
+	colors = None
+	colorsOrdered = None
+
+	@staticmethod
+	def defineColor(color, r, g, b):
+		"""Defines the given color in the terminal to have the given rgb (0-255) value."""
+		print "\033]4;%d;rgb:%2.2x/%2.2x/%2.2x\033\\" % (color, r, g, b)
+
+
+
+	colorRegex = None
+	colorRegexAt = None
+
+	@staticmethod
+	def setupColorParser():
+		typesOr = "(?:%s)" % '|'.join(TextStyle.attributeTypes.keys())
+		colorsOr = "(?:%s|color\\d+)" % '|'.join(TextStyle.colors.keys())
+
+		regex = "({color}bg)?({color})({type}*)".format(color=colorsOr, type=typesOr)
+
+		TextStyle.colorRegex = re.compile("^%s$" % regex, re.IGNORECASE)
+		TextStyle.colorRegexAt = re.compile("@%s" % regex, re.IGNORECASE)
+
+	@staticmethod
+	def parseColor(textStr):
+		match = TextStyle.colorRegex.match(textStr)
+		if not match:
+			raise ValueError("didn't match color \"%s\"" % textStr)
+		#print "groups for %s: %s" % (textStr, match.groups())
+
+		bgStr, colorStr, attrStr = match.groups()
+
+
+		ret = TextStyle()
+
+		ret.color = TextStyle._parseColorStr(colorStr)
+
+		if bgStr:
+			ret.bg = TextStyle._parseColorStr(bgStr[:-2])
+
+		if attrStr:
+			attrStr = attrStr.lower()
+			attrs = []
+			for attr in TextStyle.attributeTypes.keys():
+				if attrStr.find(attr) != -1:
+					attrs.append(attr)
+			ret.options = set(attrs)
+
+		#print "res: %s" % (ret)
+		return ret
+
+	@staticmethod
+	def _parseColorStr(colorStr):
+		if colorStr.startswith("color"):
+			# direct color in the format c123, etc
+			return int(colorStr[5:])
+
+		try:
+			return TextStyle.colors[colorStr.lower()].color
+		except KeyError:
+			return -1
+
+	
+	def __init__(self, color=-1, bg=-1, options=set()):
+		self.color = color
+		self.bg = bg
+		self.options = set(options)
+		
+	def xtermEscape(self):
+		# reset everything, who knows what it was before
+		ret = self.colorReset
+		#fg
+		if self.color >= 0:
+			ret += "\033[38;5;%dm" % self.color
+		#bg
+		if self.bg >= 0:
+			ret += "\033[48;5;%dm" % self.bg
+
+		# add attributes
+		for attrib in self.options:
+			ret += "\033[%dm" % self.attributeTypes[attrib]
+
+		return ret
+
+	def __repr__(self):
+		return "TextStyle(%s, %s, %s)" % (self.color, self.bg, self.options)
+
+# A map of colors we can use and their TextStyle
+# woudl preferto use an OrderedDict, but not enough support on old versions
+TextStyle.colorsOrdered = [
+	("darkgray", TextStyle(0)),
+	("darkred", TextStyle(1)),
+	("darkgreen", TextStyle(2)),
+	("darkyellow", TextStyle(3)),
+	("darkblue", TextStyle(4)),
+	("darkpurple", TextStyle(5)),
+	("darkcyan", TextStyle(6)),
+	("lightgray", TextStyle(7)),
+
+	("gray", TextStyle(8)),
+	("lightred", TextStyle(9)),
+	("lightgreen", TextStyle(10)),
+	("lightyellow", TextStyle(11)),
+	("lightblue", TextStyle(12)),
+	("lightpurple", TextStyle(13)),
+	("lightcyan", TextStyle(14)),
+	("white", TextStyle(15)),
+
+	("red", TextStyle(196)),
+	("green", TextStyle(46)),
+	("yellow", TextStyle(226)),
+	("orange", TextStyle(202)),
+	("blue", TextStyle(21)),
+	("purple", TextStyle(91)),
+	("cyan", TextStyle(51)),
+	("pink", TextStyle(219)),
+	("magenta", TextStyle(201)),
+
+	("black", TextStyle(16)),
+]
+TextStyle.colors = dict(TextStyle.colorsOrdered)
+TextStyle.setupColorParser()
+
+
+class ColorStream:
+
+	# order of colors to use for the basic matching items
+	colorOrder = [
+		"red",
+		"green",
+		"yellow",
+		"orange",
+		"blue",
+		"purple",
+		"cyan",
+		"pink",
+
+		"redbgwhite",
+		"greenbgblack",
+		"yellowbgblack",
+		"orangebgblack",
+		"bluebgwhite",
+		"purplebgwhite",
+		"cyanbgblack",
+		"pinkbgblack",
+
+		"whitebgblack",
+		"darkgraybgwhite",
+	]
+
+	# these strings are colored to errors
+	errorColors = {
+		"\\b(fatal|crit(itcal)?)\\b": "redbgyellow",
+		"\\berror\\b": "lightRed",
+		"\\bwarn(ing)?\\b": "yellow",
+		"\\binfo\\b": "whitebold",
+		"\\bdebug\\b": "lightBlue",
+		"\\btrace\\b": "lightPurple",
+	}
+
+	binaryColor = TextStyle.parseColor("whitebolditalic")
+
+	indentLevel = 0
+
+	binaryInterpretRegex = re.compile("\\\\x([a-f0-9]{2})", re.IGNORECASE)
+
+	def __init__(self, options, regexStrs):
+		self.options = options
+
+		# this is what we color
+		self.phrases = {}
+
+		if self.options.caseSensitive:
+			caseFlag = 0
+		else:
+			caseFlag = re.IGNORECASE
+
+		# add standard phrases
+		i = 0
+		for regexStr in regexStrs:
+			regex = re.compile(regexStr, caseFlag)
+			# set the regex to the next color in the list, if we run out of colors, reuse them
+			colorName = self.colorOrder[i % len(self.colorOrder)]
+			self.phrases[regex] = TextStyle.parseColor(colorName)
+			i += 1
+
+		# add @red, etc if requested
+		if self.options.colorAtPhrases:
+			self.phrases[TextStyle.colorRegexAt] = "selfColor"
+
+		# add coloring for "fatal" etc. if requested
+		if self.options.colorErrorLevels:
+			for text, colorName in self.errorColors.iteritems():
+				regex = re.compile(text, re.IGNORECASE)
+				self.phrases[regex] = TextStyle.parseColor(colorName)
+
+		# add specific coloring
+		for colorName, regexText in self.options.specificColors or []:
+			regex = re.compile(regexText, caseFlag)
+			self.phrases[regex] = TextStyle.parseColor(colorName)
+
+		# things we skip
+		self.skips = []
+		for skipText in self.options.skips or []:
+			regex = re.compile(skipText, caseFlag)
+			self.skips.append(regex)
+
+
+	def streamFromStdin(self):
+		# v can't use this because of buffering issues
+		#for line in sys.stdin:
+		#	self.process(line)
+
+		while True:
+			line = sys.stdin.readline()
+			if line == "":
+				break
+			self.process(line)
+
+	def process(self, text):
+		"""Takes some text (typically about a line's worth or so) and processes and outputs it."""
+		if self.options.unBinary:
+			text = self.binaryInterpret(text)
+
+		for skip in self.skips:
+			text = skip.sub("", text)
+
+		if self.options.newLine:
+			text = text.replace("\\n", "\n").replace("\\t", "\t").replace("\xE2\x90\xA4", "\n")
+
+		for line in text.splitlines():
+			if self.options.parens:
+				if self.options.parens == 1:
+					indented = self.indent(line, ('(',), (')',))
+				elif self.options.parens == 2:
+					indented = self.indent(line, ('(', '{', '['), (']', '}', ')'))
+				else:
+					indented = self.superIndent(line)
+
+				for subline in indented.splitlines():
+					self._processLine(subline)
+			else:
+				self._processLine(line)
+
+	def _processLine(self, line):
+		"""
+		Sets line to the current line, then processes it
+		Line must have no newlines in it and indentation must already be processed
+		"""
+
+		self.line = line
+		self.lineColors = []
+
+		# do binary escape jazz (note that this changes self.line, so setting any lineColors before this will not work
+		if self.options.binary:
+			self._binaryEscape()
+
+
+		# add markers for all the colors we'll change
+		for regex, color in self.phrases.iteritems():
+			for match in regex.finditer(self.line):
+				if match.start() == match.end():
+					continue
+
+				if color == "selfColor":
+					try:
+						thisColor = TextStyle.parseColor(match.group(0)[1:])
+						self.lineColors.append((match.start(), thisColor))
+						self.lineColors.append((match.end(), None))
+					except ValueError:
+						pass
+				else:
+					self.lineColors.append((match.start(), color))
+					self.lineColors.append((match.end(), None))
+
+		# color and print the line
+		print(self._colorLine())
+
+	def _colorLine(self):
+		"""Takes the line and colors in the current state and returns a string that can be output to the terminal"""
+		self.lineColors.sort()
+
+		ret = ""
+		linePos = 0
+		colorStack = [TextStyle()]
+
+
+		for markerPos, color in self.lineColors:
+			#append everything before this marker
+			ret += self.line[linePos:markerPos]
+			linePos = markerPos
+
+			#insert the color we are doing
+			if color:
+				# push new color onto stack
+				ret += color.xtermEscape()
+				colorStack.append(color)
+			else:
+				# remove color from stack, go back to previous color
+				colorStack.pop()
+				ret += colorStack[-1].xtermEscape()
+
+		# add the rest of the line
+		ret += self.line[linePos:]
+
+		return ret
+
+	def indent(self, text, inChars, outChars):
+		ret = ""
+		indentText = "    "
+
+		#nice and slow. and lazy.
+		lastWasLine = False
+		for c in text:
+			if c in inChars:
+				ret += "\n" + (indentText * self.indentLevel) + c + "\n"
+				self.indentLevel += 1
+				ret += indentText * self.indentLevel
+				lastWasLine = True
+			elif c in outChars:
+				self.indentLevel -= 1
+				ret += "\n" + (indentText * self.indentLevel) + c + "\n" + (indentText * self.indentLevel)
+				lastWasLine = True
+			elif c == "\n":
+				ret += c + (indentText * self.indentLevel)
+				lastWasLine = True
+			else:
+				if lastWasLine:
+					n = c.strip()
+					if len(n):
+						lastWasLine = False
+					ret += n
+				else:
+					ret += c
+
+		return ret
+
+	def superIndent(self, text):
+		ret = ""
+		indentText = "    "
+		inChars = ('{', '[')
+		outChars = (']', '}')
+		nlChars = (',')
+
+		def indent():
+			return (indentText * self.indentLevel)
+
+		lastWasLine = False
+		for c in text:
+			if c in inChars:
+				self.indentLevel += 1
+				ret += c + "\n" + indent()
+				lastWasLine = True
+			elif c in nlChars:
+				ret += c + "\n" + indent()
+				lastWasLine = True
+			elif c in outChars:
+				self.indentLevel -= 1
+				ret += "\n" + indent() + c
+				#lastWasLine = True
+			elif c == "\n":
+				ret += c + indent()
+				lastWasLine = True
+			else:
+				if lastWasLine:
+					n = c.strip()
+					if len(n):
+						lastWasLine = False
+					ret += n
+				else:
+					ret += c
+
+		return ret
+
+	def _binaryEscape(self):
+		"""Takes the current line and escapes non-printable characters, and adds some highlighting to that."""
+		newLine = ""
+		lastWasHex = False
+
+		for c in self.line:
+			charOrd = ord(c)
+			# 32 == " "
+			# 126 == "~"
+			# 10 == "\n"
+			if (charOrd < 32 or charOrd > 126) and charOrd != 10:
+				# this isn't printable, escape it
+
+				if not lastWasHex:
+					# add color
+					self.lineColors.append((len(newLine), self.binaryColor))
+					# and start the hex bits
+					newLine += "0x"
+				else:
+					# jsut pad the numbers apart in the middle
+					newLine += " "
+
+				# add the hex representation
+				newLine += hex(charOrd)[2:].upper().rjust(2, '0')
+
+				lastWasHex = True
+			else:
+				# printable jsut add it
+				if lastWasHex:
+					# but mark the highlight to stop if we just left binary bits
+					self.lineColors.append((len(newLine), None))
+					lastWasHex = False
+				newLine += c
+
+		if lastWasHex:
+			self.lineColors.append((len(newLine), None))
+
+		self.line = newLine
+
+
+	def binaryInterpret(self, text):
+		"""Takes text, interprets the binary bits, then returns the interpreted text"""
+		ret = ""
+		textPos = 0
+
+		for match in self.binaryInterpretRegex.finditer(text):
+			# grab all text before this
+			ret += text[textPos:match.start()]
+			textPos = match.end()
+
+			# add the interpreted character (read as hex from the string)
+			ret += chr(int(match.group(1), 16))
+
+		# add remaining text
+		ret += text[textPos:]
+
+		return ret
+
+def doRainbow():
+	def sample(name, color):
+		print "\t%s%sSample%s" % ((name + ": ").ljust(13), color.xtermEscape(), color.colorReset)
+	def sampleInline(name, color):
+		sys.stdout.write(
+			"%s%s%s" % (color.xtermEscape(), name, color.colorReset)
+		)
+
+	print "\nSimple colors:"
+	for name, color in TextStyle.colorsOrdered:
+		sample(name, color)
+
+	print "\nNumbered colors:"
+	print "Specify any color you desire by putting in \"color[n]\" where n is one of:"
+	for c in range(256):
+		s = ("%d" % c).rjust(3)
+		sampleInline(s, TextStyle.parseColor("color%d" % c))
+		sys.stdout.write(" ")
+		sampleInline(" ", TextStyle.parseColor("color%dbgwhite" % c))
+		sys.stdout.write("  ")
+
+		if c < 16 and c % 8 == 7:
+			print
+		elif 16 < c < 232 and (c - 16) % 6 == 5:
+			print
+		elif c >= 232 and (c - 232) % 8 == 7:
+			print
+
+
+	print "\n\nAttributes: (add to the end of a color name to use)"
+	for attrib in TextStyle.attributeTypes.keys():
+		c = TextStyle(options=(attrib,))
+		sample(attrib, c)
+	print "Such as:"
+	sample("redbold", TextStyle.parseColor("redbold"))
+	sample("whiteunderline", TextStyle.parseColor("whiteunderline"))
+
+	print "\nDefault colors for positional arguments:"
+	i = 0
+	for colorName in ColorStream.colorOrder:
+		c = TextStyle.parseColor(colorName)
+		i += 1
+		sample("Argument %d" % i, c)
+
+	print "\nAdd \"bg[somecolor]\" to the beginning of a color to change the bg"
+	sample("redbgblue", TextStyle.parseColor("redbgblue"))
+	sample("redBgBlueBold", TextStyle.parseColor("redBgBlueBold"))
+	sample("darkGreenBgCyanBoldUnderline", TextStyle.parseColor("darkGreenBgCyanBoldUnderline"))
+
+
+
+if __name__ == '__main__':
+
+	VERSION = "Qualtrics Color Script 2.0.0"
+	locale.setlocale(locale.LC_NUMERIC, '')
+
+	class PlainFormatter(optparse.IndentedHelpFormatter):
+		def format_epilog(self, des):
+			return des
+
+
+	#Setup arg parser:
+	parser = optparse.OptionParser(
+		usage="%prog [args] regex1 [regex2 ...]",
+		description="""Reads text from stdin and outputs it with coloring and other formatting.
+Each regex[1..n] will be given a different color.
+""",
+		version=VERSION,
+		formatter=PlainFormatter(),
+	)
+	parser.add_option('--rainbow', dest='rainbow', action="store_true",
+		help="""show available colors and styles and exit"""
+	)
+
+
+
+	options = optparse.OptionGroup(parser, "General Options",
+		""""""
+	)
+	options.add_option('-i', '--case-insensetive', dest='caseSensitive', action="store_false", default=False,
+		help="""Do a case-insensetive match (default)"""
+	)
+	options.add_option('-I', '--case-sensetive', dest='caseSensitive', action="store_true",
+		help="""Do a case-sensitive match"""
+	)
+	parser.add_option_group(options)
+
+	options = optparse.OptionGroup(parser, "Whitespace Options",
+		"""These options primarily affect the whitespace of outputted text."""
+	)
+	options.add_option('-n', '--restore-newlines', dest='newLine', action="store_true",
+		help="""Change "\\n", "\\t" and the UTF-8 bytes for \\u2424 into newlines, tabs, and newlines respectively"""
+	)
+	options.add_option('-p', '--parenthesize', dest='parens', action="count",
+		help="""Indent (). Add this option twice to include {}, and []. Add this option thrice to enable indentor mode."""
+	)
+	parser.add_option_group(options)
+
+
+	options = optparse.OptionGroup(parser, "Material Options",
+		"""These options alter the input text."""
+	)
+	options.add_option('-b', '--escape-binary', dest='binary', action="store_true",
+		help="""Convert non-printable ASCII charactes to hex binary output (colored white for clarity)"""
+	)
+	options.add_option('-B', '--interpret-binary', dest='unBinary', action="store_true",
+		help="""Convert hex binary text into binary data
+		"\\x20" becomes a space, "\\x41" becomes "A", etc.
+		"""
+	)
+	options.add_option('-s', '--skip', metavar="REGEX", dest='skips', nargs=1, action="append",
+		help="""Skip/strip text that matches the given regex from the output. This may be specified multiple times."""
+	)
+	parser.add_option_group(options)
+
+
+	options = optparse.OptionGroup(parser, "Coloring Options",
+		"""These options add to the sets of items that will be colored."""
+	)
+	options.add_option('-c', '--color-this', metavar="COLOR REGEX", dest='specificColors', nargs=2, action="append",
+		help="""Colors the given regex in the given color. May be specified multiple times."""
+	)
+	options.add_option('-a', '--color-ats', dest='colorAtPhrases', action="store_true",
+		help="""Look for and color phrases like @red, @green, @blue, etc."""
+	)
+	options.add_option('-e', '--color-error-levels', dest='colorErrorLevels', action="store_true",
+		help="""Look for and color phrases like 'error', 'warning', 'debug', etc."""
+	)
+	parser.add_option_group(options)
+
+	options = optparse.OptionGroup(parser, "Group Sets",
+		"""Turn on commonly used combinations of options easily."""
+	)
+	options.add_option('-g', '-j', '--option-group', dest='optionGroup', action="append",
+		help="""Use a pre-defined option group (see below). You only need to specify enough letters to uniquely identify the group"""
+	)
+	parser.add_option_group(options)
+
+	optionGroups = """Option Groups:
+	"web" adds these options:
+		-aen -s "referer: .*$" \\
+			-c color243 "\\[(\w{3} \w{3} [0-9 :]{11,})|([0-9 :]{11,})\\]" \\
+			-c color243 "\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}([,.]\\d{3})?"
+
+	"java" adds these options:
+		-aen -s "\s+\\[java\\]" \\
+			-c lightred "\\w+Exception"
+			-c color26 "\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}([,.]\\d{3})?" \\
+			-c color241 "\\[[^]]+\\]"
+
+"""
+
+	#colorsList = "Colors: " + ", ".join(ColorStream.colors.keys()) + ".\n"
+
+	parser.epilog = "\n" + optionGroups + "\nThis color script was developed by Qualtrics.\n\n"
+
+	#Parse and validate args:
+	if len(sys.argv) == 1:
+		parser.print_help()
+		sys.exit(0)
+	options, args = parser.parse_args()
+#	print "options and args: ", options, args
+
+	if options.rainbow:
+		doRainbow()
+		sys.exit(0)
+
+	for group in options.optionGroup or []:
+		#todolater: when there's more groups, actually implement an algo to find the group name
+		if group == "web" or group == "we" or group == "w":
+			options.colorAtPhrases = True
+			options.colorErrorLevels = True
+			options.newLine = True
+
+			options.skips = options.skips or []
+			options.skips.append("(, )?referer: .*$")
+
+			options.specificColors = options.specificColors or []
+			options.specificColors += [
+				("color243", "\\[(\w{3} \w{3} [0-9 :]{11,}|[0-9 :]{11,})\\]"),
+				("color243", "\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}([,.]\\d{3})?"),
+			]
+		elif group == "java" or group == "jav" or group == "ja" or group == "j":
+			options.colorAtPhrases = True
+			options.colorErrorLevels = True
+			options.newLine = True
+
+			options.skips = options.skips or []
+			options.skips.append("\s+\\[java\\]")
+
+			options.specificColors = options.specificColors or []
+			options.specificColors += [
+				("lightred", "\\w+Exception"),
+				("color26", "\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}([,.]\\d{3})?"),
+				("color241", "\\[[^]]+\\]"),
+			]
+		else:
+			raise ValueError("Unknown option group: %s" % group)
+
+	if options.parens >= 3:
+		options.specificColors = options.specificColors or []
+		options.specificColors += [
+			("color229", "\"[^\"]+\""),
+			("color229", "\'[^\']+\'"),
+			("color124", ",\\s*$"),
+			("pink", "^    (        )*[]}]"),
+			("purple", "^(        )*[]}]"),
+			("pink", "^    (        )*[^ ].*[[{]"),
+			("purple", "^(        )*[^ ].*[[{]"),
+			("lightblue", "u?(['\"])\w+\\1:"),
+			("green", "true"),
+			("red", "false"),
+			("lightgray", "null"),
+		]
+
+
+
+	try:
+		streamer = ColorStream(options, args)
+		streamer.streamFromStdin()
+	except KeyboardInterrupt:
+		pass
+
