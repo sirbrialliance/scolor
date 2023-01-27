@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Color output script
+VERSION = "Stream Coloring Script 3.0.0"
+
+# Stream coloring output script.
 #
-# Copyright (c) 2013, Qualtrics
+# Copyright 2013 Qualtrics
 # All rights reserved.
+# Copyright 2023 Jonathan Stephens
 #
 # Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
 # following conditions are met:
@@ -525,7 +528,6 @@ def doRainbow():
 
 if __name__ == '__main__':
 
-	VERSION = "Qualtrics Color Script 2.0.0"
 	locale.setlocale(locale.LC_NUMERIC, '')
 
 	class PlainFormatter(optparse.IndentedHelpFormatter):
@@ -537,6 +539,7 @@ if __name__ == '__main__':
 	parser = optparse.OptionParser(
 		usage="%prog [args] regex1 [regex2 ...]",
 		description="""Reads text from stdin and outputs it with coloring and other formatting.
+This tool is intended primarily to help one quickly scan and understand log files.
 Each regex[1..n] will be given a different color.
 """,
 		version=VERSION,
@@ -626,7 +629,14 @@ Each regex[1..n] will be given a different color.
 
 	#colorsList = "Colors: " + ", ".join(ColorStream.colors.keys()) + ".\n"
 
-	parser.epilog = "\n" + optionGroups + "\nThis color script was developed by Qualtrics.\n\n"
+	parser.epilog = "\n" + optionGroups + """
+
+A couple examples:
+
+	$ cat someFile.log | scolor timeout disconnect | less -R # look through log events
+	$ tail -f someFile.log | scolor timeout disconnect # live monitor
+
+"""
 
 	#Parse and validate args:
 	if len(sys.argv) == 1:
@@ -692,6 +702,6 @@ Each regex[1..n] will be given a different color.
 	try:
 		streamer = ColorStream(options, args)
 		streamer.streamFromStdin()
-	except KeyboardInterrupt:
+	except (KeyboardInterrupt, BrokenPipeError):
 		pass
 
