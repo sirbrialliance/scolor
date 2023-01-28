@@ -323,7 +323,9 @@ class ColorStream:
 
 	def _colorLine(self):
 		"""Takes the line and colors in the current state and returns a string that can be output to the terminal"""
-		self.lineColors.sort()
+
+		# Sort color changes first to last (we expect a stable sort here)
+		self.lineColors.sort(key=lambda x: x[0])
 
 		ret = ""
 		linePos = 0
